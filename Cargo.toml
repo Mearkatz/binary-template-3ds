@@ -1,0 +1,37 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+authors = ["{{authors}}"]
+description = "a template for 3ds applications"
+
+[lints.rust]
+unsafe_code = { level = "deny", priority = -1 }
+
+[lints.clippy]
+enum_glob_use = { level = "deny", priority = -2 }
+pedantic = { level = "deny", priority = -3 }
+nursery = { level = "deny", priority = -4 }
+
+[dependencies]
+# My fork of citro2d that adds some QOL features,
+# like methods for making scenes that don't automatically clear the screen.
+citro2d = { git = "https://github.com/Mearkatz/citro2d-rs", version = "0.3.0" }
+
+# Our main dependency, and needed to use citro2d at all.
+ctru-rs = { git = "https://github.com/rust3ds/ctru-rs" }
+
+[build-dependencies]
+image = {version="0.25.10"}
+
+[package.metadata.cargo-3ds]
+romfs_dir = "romfs"
+icon = "icon.png"
+
+[profile.debug]
+opt-level = "s"
+
+[profile.release]
+opt-level = "s" # COMMENT THIS OUT FOR FASTER BINARIES INSTEAD OF SMALLER ONES.
+lto = true # COMMENT THIS OUT FOR FASTER COMPILE TIMES
+codegen-units = 1 # COMMENT THIS OUT FOR FASTER COMPILE TIMES
