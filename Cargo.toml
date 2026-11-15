@@ -28,7 +28,7 @@ image = {version="0.25.10"}
 romfs_dir = "romfs"
 icon = "icon.png"
 
-[profile.debug]
+[profile.dev]
 opt-level = "s"
 
 [profile.release]
