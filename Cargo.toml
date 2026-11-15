@@ -21,9 +21,6 @@ citro2d = { git = "https://github.com/Mearkatz/citro2d-rs", version = "0.3.0" }
 # Our main dependency, and needed to use citro2d at all.
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs" }
 
-[build-dependencies]
-image = {version="0.25.10"}
-
 [package.metadata.cargo-3ds]
 romfs_dir = "romfs"
 icon = "icon.png"

@@ -1,12 +1,34 @@
-use image::{GenericImageView, ImageFormat, imageops::FilterType};
-use std::{fs, path::PathBuf, process};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    process::{self, Command},
+};
 
 const SIZE: u32 = 48;
 const OUT_NAME: &str = "icon.png";
 
-fn fail(msg: String) -> ! {
+/// Extensions considered when looking for an `icon.<ext>` file.
+const EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff", "ico", "tga", "qoi", "avif", "svg",
+];
+
+fn fail(msg: &str) -> ! {
     eprintln!("error: {msg}");
     process::exit(1);
+}
+
+/// Reads the width and height out of a PNG's IHDR chunk, so an icon that is
+/// already the right size doesn't need `ImageMagick` at all.
+fn png_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let mut header = [0u8; 24];
+    fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
+    if &header[..8] != b"\x89PNG\r\n\x1a\n" || &header[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(header[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(header[20..24].try_into().ok()?);
+    Some((width, height))
 }
 
 fn main() {
@@ -17,9 +39,9 @@ fn main() {
 
     let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    // Find files named `icon.<ext>` where <ext> is a format `image` can read.
+    // Find files named `icon.<ext>` where <ext> is a known image format.
     let entries = fs::read_dir(&dir)
-        .unwrap_or_else(|e| fail(format!("could not read {}: {e}", dir.display())));
+        .unwrap_or_else(|e| fail(&format!("could not read {}: {e}", dir.display())));
     let mut candidates: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -29,11 +51,11 @@ fn main() {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .is_some_and(|s| s.eq_ignore_ascii_case("icon"));
-            let fmt_ok = p
+            let ext_ok = p
                 .extension()
-                .and_then(ImageFormat::from_extension)
-                .is_some_and(|f| f.can_read());
-            stem_ok && fmt_ok
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)));
+            stem_ok && ext_ok
         })
         .collect();
     candidates.sort();
@@ -49,47 +71,50 @@ fn main() {
                 .iter()
                 .filter_map(|p| p.file_name()?.to_str().map(str::to_owned))
                 .collect();
-            fail(format!(
+            fail(&format!(
                 "multiple possible icons found: {}. Keep only one icon.* file.",
                 names.join(", ")
             ));
         }
     };
 
-    let img = image::open(&src)
-        .unwrap_or_else(|e| fail(format!("could not read {}: {e}", src.display())));
-
+    let src_name = src.file_name().and_then(|n| n.to_str()).unwrap_or("icon");
     let out = dir.join(OUT_NAME);
-    let is_png_named_icon = src.file_name().is_some_and(|n| n == OUT_NAME);
 
     // Already a 48x48 icon.png: nothing to do.
-    if is_png_named_icon && img.dimensions() == (SIZE, SIZE) {
+    if src_name == OUT_NAME && png_dimensions(&src) == Some((SIZE, SIZE)) {
         return;
     }
 
-    let resized = if img.dimensions() == (SIZE, SIZE) {
-        img
-    } else {
-        img.resize_to_fill(SIZE, SIZE, FilterType::Lanczos3)
-    };
-
-    resized
-        .save_with_format(&out, ImageFormat::Png)
-        .unwrap_or_else(|e| fail(format!("could not write {}: {e}", out.display())));
+    // Scale to cover a SIZE x SIZE square, then crop the overflow from the center.
+    // Runs inside the project directory with bare file names, so nothing in the
+    // directory's path can be mistaken for ImageMagick syntax.
+    let size = format!("{SIZE}x{SIZE}");
+    let status = Command::new("magick")
+        .current_dir(&dir)
+        .arg(format!("{src_name}[0]")) // first frame only, for animations and multi-size .ico
+        .args(["-filter", "Lanczos", "-resize", &format!("{size}^")])
+        .args(["-gravity", "center", "-extent", &size])
+        .arg("-strip")
+        .arg(format!("PNG32:{OUT_NAME}"))
+        .status()
+        .unwrap_or_else(|e| {
+            fail(&format!(
+                "could not run `magick` to convert {src_name}: {e}. \
+                 Install ImageMagick 7, or provide a {size} {OUT_NAME} yourself."
+            ))
+        });
+    if !status.success() {
+        fail(&format!("`magick` failed to convert {src_name} ({status})"));
+    }
 
     // Remove the original (e.g. icon.jpg) so only one icon file remains.
     // Skip when it's the same file as the output (case-insensitive filesystems).
-    if fs::canonicalize(&src).ok() != fs::canonicalize(&out).ok() {
-        if let Err(e) = fs::remove_file(&src) {
-            println!(
-                "cargo:warning=wrote {OUT_NAME} but could not remove {}: {e}",
-                src.display()
-            );
-        }
+    if fs::canonicalize(&src).ok() != fs::canonicalize(&out).ok()
+        && let Err(e) = fs::remove_file(&src)
+    {
+        println!("cargo:warning=wrote {OUT_NAME} but could not remove {src_name}: {e}");
     }
 
-    println!(
-        "cargo:warning=converted {} to {OUT_NAME} ({SIZE}x{SIZE})",
-        src.file_name().and_then(|n| n.to_str()).unwrap_or("icon")
-    );
+    println!("cargo:warning=converted {src_name} to {OUT_NAME} ({size})");
 }
